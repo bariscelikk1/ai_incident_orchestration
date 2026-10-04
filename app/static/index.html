@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SentinelFlow</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; background: #090d14; color: #e7edf7; }
+      main { max-width: 980px; margin: auto; padding: 48px 20px 80px; }
+      header { margin-bottom: 34px; }
+      h1 { margin: 0; font-size: clamp(2.4rem, 7vw, 4.8rem); letter-spacing: -0.06em; }
+      header p { color: #96a3b7; max-width: 680px; font-size: 1.1rem; }
+      .badge { color: #64e6b7; font: 700 .78rem ui-monospace, monospace; letter-spacing: .12em; }
+      .grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 18px; }
+      .card { background: #101722; border: 1px solid #243042; border-radius: 18px; padding: 22px; }
+      label { display: block; color: #aab5c5; font-size: .86rem; margin: 15px 0 7px; }
+      input, textarea, select { width: 100%; box-sizing: border-box; background: #0a1019; color: #edf3fc; border: 1px solid #334157; border-radius: 10px; padding: 11px 12px; }
+      textarea { min-height: 120px; resize: vertical; }
+      button { border: 0; border-radius: 10px; padding: 11px 15px; font-weight: 750; cursor: pointer; }
+      .primary { width: 100%; margin-top: 16px; background: #64e6b7; color: #06110d; }
+      .approve { background: #64e6b7; color: #06110d; }
+      .reject { background: #ff6f7d; color: #1a0508; }
+      .actions { display: flex; gap: 10px; margin-top: 18px; }
+      .muted { color: #8794a8; }
+      .status { display: inline-block; background: #1b2737; border-radius: 999px; padding: 6px 10px; font: .76rem ui-monospace, monospace; }
+      .evidence { border-left: 2px solid #557092; padding-left: 12px; margin: 12px 0; }
+      .evidence code { color: #64e6b7; }
+      .error { color: #ff8994; }
+      @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="badge">MCP · RETRIEVAL · HUMAN APPROVAL</div>
+        <h1>SentinelFlow</h1>
+        <p>An evidence-grounded copilot for simulated payment incidents. It collects logs and runbooks, proposes a diagnosis, and waits for an engineer.</p>
+      </header>
+      <div class="grid">
+        <form id="incident-form" class="card">
+          <h2>Report an incident</h2>
+          <label for="demo">Prepared scenario</label>
+          <select id="demo"></select>
+          <label for="title">Title</label>
+          <input id="title" required minlength="5" />
+          <label for="service">Service</label>
+          <input id="service" required value="payment-api" />
+          <label for="description">Description</label>
+          <textarea id="description" required minlength="10"></textarea>
+          <button class="primary" type="submit">Investigate incident</button>
+          <p id="form-status" class="muted"></p>
+        </form>
+        <section id="result" class="card">
+          <h2>Investigation</h2>
+          <p class="muted">Submit an incident to collect evidence.</p>
+        </section>
+      </div>
+    </main>
+    <script>
+      const form = document.querySelector('#incident-form');
+      const result = document.querySelector('#result');
+      const statusLine = document.querySelector('#form-status');
+      let current = null;
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+      }
+
+      function render(incident) {
+        current = incident;
+        const diagnosis = incident.diagnosis;
+        result.innerHTML = `
+          <span class="status">${escapeHtml(incident.status)}</span>
+          <h2>${escapeHtml(diagnosis.likely_cause)}</h2>
+          <p><strong>${diagnosis.confidence}% confidence</strong> · ${escapeHtml(diagnosis.severity)} severity</p>
+          <p>${escapeHtml(diagnosis.recommendation)}</p>
+          <h3>Evidence</h3>
+          ${incident.evidence.map(item => `<div class="evidence"><code>${escapeHtml(item.id)}</code><br>${escapeHtml(item.content)}</div>`).join('')}
+          <h3>Missing evidence</h3>
+          <p class="muted">${diagnosis.missing_evidence.map(escapeHtml).join(' · ') || 'None'}</p>
+          ${incident.status === 'awaiting_approval' ? `<div class="actions"><button class="approve" data-decision="approve">Approve</button><button class="reject" data-decision="reject">Reject</button></div>` : ''}
+        `;
+      }
+
+      async function loadDemos() {
+        const demos = await fetch('/api/demo-incidents').then(r => r.json());
+        const select = document.querySelector('#demo');
+        select.innerHTML = demos.map((item, index) => `<option value="${index}">${escapeHtml(item.title)}</option>`).join('');
+        function apply() {
+          const item = demos[Number(select.value)];
+          document.querySelector('#title').value = item.title;
+          document.querySelector('#service').value = item.service;
+          document.querySelector('#description').value = item.description;
+        }
+        select.addEventListener('change', apply);
+        apply();
+      }
+
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        statusLine.textContent = 'Collecting evidence and preparing a diagnosis…';
+        try {
+          const response = await fetch('/api/incidents', {
+            method: 'POST', headers: {'content-type': 'application/json'},
+            body: JSON.stringify({title: title.value, service: service.value, description: description.value})
+          });
+          if (!response.ok) throw new Error((await response.json()).detail || 'Request failed');
+          render(await response.json());
+          statusLine.textContent = 'Investigation complete.';
+        } catch (error) {
+          statusLine.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+        }
+      });
+
+      result.addEventListener('click', async event => {
+        const decision = event.target.dataset.decision;
+        if (!decision || !current) return;
+        const response = await fetch(`/api/incidents/${current.id}/decision`, {
+          method: 'POST', headers: {'content-type': 'application/json'},
+          body: JSON.stringify({decision, actor: 'demo-engineer', reason: 'Reviewed available evidence'})
+        });
+        render(await response.json());
+      });
+
+      loadDemos();
+    </script>
+  </body>
+</html>
+
